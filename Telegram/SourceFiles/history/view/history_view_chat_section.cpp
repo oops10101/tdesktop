@@ -4459,16 +4459,9 @@ void ChatWidget::restoreState(not_null<ChatMemento*> memento) {
 	updateBotKeyboard();
 	if (mode() == Mode::History) {
 		// Must be done before unreadCountUpdated(), or we auto-close.
-		if (_history->unreadMark()) {
-			session().data().histories().changeDialogUnreadMark(
-				_history,
-				false);
-		}
-		const auto migrated = _history->migrateFrom();
-		if (migrated && migrated->unreadMark()) {
-			session().data().histories().changeDialogUnreadMark(
-				migrated,
-				false);
+		session().data().histories().clearUnreadMarkOnOpen(_history);
+		if (const auto migrated = _history->migrateFrom()) {
+			session().data().histories().clearUnreadMarkOnOpen(migrated);
 		}
 		unreadCountUpdated();
 	}

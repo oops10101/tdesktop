@@ -918,6 +918,11 @@ void RepliesList::readTill(
 		HistoryItem *tillIdItem) {
 	if (!IsServerMsgId(tillId)) {
 		return;
+	} else if (GhostModeKeepsUnread()) {
+		if (const auto topic = _history->peer->forumTopicFor(_rootId)) {
+			Core::App().notifications().clearIncomingFromTopic(topic);
+		}
+		return;
 	}
 	const auto was = computeInboxReadTillFull();
 	const auto now = tillId;
@@ -942,7 +947,9 @@ void RepliesList::readTill(
 				post->setCommentsInboxReadTill(now);
 			}
 		}
-		if (!_readRequestTimer.isActive()) {
+		if (GhostModeEnabled()) {
+			// Ghost mode: read on this device only.
+		} else if (!_readRequestTimer.isActive()) {
 			_readRequestTimer.callOnce(fast ? 0 : kReadRequestTimeout);
 		} else if (fast && _readRequestTimer.remainingTime() > 0) {
 			_readRequestTimer.callOnce(0);
@@ -956,6 +963,9 @@ void RepliesList::readTill(
 void RepliesList::sendReadTillRequest() {
 	if (_readRequestTimer.isActive()) {
 		_readRequestTimer.cancel();
+	}
+	if (GhostModeEnabled()) {
+		return;
 	}
 	const auto api = &_history->session().api();
 	api->request(base::take(_readRequestId)).cancel();

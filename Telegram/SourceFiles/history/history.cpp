@@ -3671,6 +3671,12 @@ void History::applyDialogFields(
 		setUnreadCount(unreadCount);
 		setInboxReadTill(maxInboxRead);
 	}
+	if (!skipUnreadUpdate()) {
+		owner().histories().applyGhostReadState(
+			this,
+			maxInboxRead,
+			unreadCount);
+	}
 	setOutboxReadTill(maxOutboxRead);
 }
 

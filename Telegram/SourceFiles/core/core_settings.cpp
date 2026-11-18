@@ -1488,6 +1488,7 @@ void Settings::addFromSerialized(
 	_chatFiltersHorizontal = (chatFiltersHorizontal == 1);
 	_quickDialogAction = Dialogs::Ui::QuickDialogAction(quickDialogAction);
 	_notificationsVolume = notificationsVolume;
+	applyGhostModePrefs();
 }
 
 void Settings::clearPref(std::string_view key) {
@@ -2183,6 +2184,23 @@ Dialogs::Ui::QuickDialogAction Settings::quickDialogAction() const {
 
 void Settings::setQuickDialogAction(Dialogs::Ui::QuickDialogAction action) {
 	_quickDialogAction = action;
+}
+
+// Ghost mode switches live in the generic prefs map, so the settings
+// file format stays compatible with the official app.
+void Settings::applyGhostModePrefs() {
+	_ghostMode = readPref<bool>("ghost_mode", false);
+	_ghostKeepUnread = readPref<bool>("ghost_keep_unread", true);
+}
+
+void Settings::setGhostMode(bool enabled) {
+	_ghostMode = enabled;
+	writePref<bool>("ghost_mode", enabled);
+}
+
+void Settings::setGhostKeepUnread(bool enabled) {
+	_ghostKeepUnread = enabled;
+	writePref<bool>("ghost_keep_unread", enabled);
 }
 
 } // namespace Core

@@ -1459,6 +1459,20 @@ void ApiWrap::migrateFail(not_null<PeerData*> peer, const QString &error) {
 	}
 }
 
+namespace {
+
+// Ghost mode also hides "listened / opened" receipts. View-once media is
+// left alone: its self-destruct timer has to start on the server as usual.
+[[nodiscard]] bool GhostHidesContentsRead(not_null<HistoryItem*> item) {
+	if (!Data::GhostModeEnabled()) {
+		return false;
+	}
+	const auto media = item->media();
+	return !media || !media->ttlSeconds();
+}
+
+} // namespace
+
 void ApiWrap::markContentsRead(
 		const base::flat_set<not_null<HistoryItem*>> &items) {
 	auto markedIds = QVector<MTPint>();
@@ -1467,7 +1481,12 @@ void ApiWrap::markContentsRead(
 		QVector<MTPint>>();
 	markedIds.reserve(items.size());
 	for (const auto &item : items) {
-		if (!item->markContentsRead(true) || !item->isRegular()) {
+		if (GhostHidesContentsRead(item)) {
+			if (!Data::GhostModeKeepsUnread()) {
+				item->markContentsRead(true);
+			}
+			continue;
+		} else if (!item->markContentsRead(true) || !item->isRegular()) {
 			continue;
 		}
 		if (const auto channel = item->history()->peer->asChannel()) {
@@ -1492,7 +1511,12 @@ void ApiWrap::markContentsRead(
 }
 
 void ApiWrap::markContentsRead(not_null<HistoryItem*> item) {
-	if (!item->markContentsRead(true) || !item->isRegular()) {
+	if (GhostHidesContentsRead(item)) {
+		if (!Data::GhostModeKeepsUnread()) {
+			item->markContentsRead(true);
+		}
+		return;
+	} else if (!item->markContentsRead(true) || !item->isRegular()) {
 		return;
 	}
 	const auto ids = MTP_vector<MTPint>(1, MTP_int(item->id));

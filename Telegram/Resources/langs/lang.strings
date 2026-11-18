@@ -471,6 +471,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_signup_lastname" = "Last name";
 
 "lng_dlg_filter" = "Search";
+"lng_ghost_mode" = "Ghost mode";
+"lng_ghost_mode_enabled" = "Ghost mode on. Chats you read won't show as read to others.";
+"lng_ghost_mode_disabled" = "Ghost mode off. Read receipts work as usual again.";
+"lng_ghost_keep_unread" = "Keep chats unread";
+"lng_ghost_keep_unread_about" = "Senders never see you read. When this is on, chats stay unread here too.";
 "lng_dlg_new_group_name" = "Group name";
 "lng_dlg_new_channel_name" = "Channel name";
 "lng_dlg_new_bot_name" = "Bot name";

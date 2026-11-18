@@ -33,7 +33,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_element.h"
 #include "iv/iv_rich_page.h"
 #include "core/application.h"
+#include "core/core_settings.h"
 #include "apiwrap.h"
+
+#include <QtCore/QDataStream>
 
 namespace Data {
 namespace {
@@ -142,9 +145,26 @@ MTPInputMedia WebPageForMTP(
 		MTP_string(draft.url));
 }
 
+bool GhostModeEnabled() {
+	return Core::App().settings().ghostMode();
+}
+
+bool GhostModeKeepsUnread() {
+	const auto &settings = Core::App().settings();
+	return settings.ghostMode() && settings.ghostKeepUnread();
+}
+
 Histories::Histories(not_null<Session*> owner)
 : _owner(owner)
 , _readRequestsTimer([=] { sendReadRequests(); }) {
+	// Reads queued just before ghost mode was enabled are held back
+	// while it is on and go out once it is turned off.
+	Core::App().settings().ghostModeValue(
+	) | rpl::filter([](bool enabled) {
+		return !enabled;
+	}) | rpl::on_next([=](bool) {
+		sendReadRequests();
+	}, _ghostLifetime);
 }
 
 Session &Histories::owner() const {
@@ -179,6 +199,7 @@ void Histories::unloadAll() {
 }
 
 void Histories::clearAll() {
+	_ghostExplicitReads.clear();
 	_map.clear();
 }
 
@@ -265,6 +286,11 @@ void Histories::readInboxTill(
 	DEBUG_LOG(("Reading: readInboxTill %1, force %2."
 		).arg(tillId.bare
 		).arg(Logs::b(force)));
+
+	if (GhostModeEnabled()) {
+		ghostReadInboxTill(history, tillId);
+		return;
+	}
 
 	const auto syncGuard = gsl::finally([&] {
 		DEBUG_LOG(("Reading: in guard, unread %1."
@@ -380,7 +406,9 @@ rpl::producer<Histories::ShownRead> Histories::shownReads() const {
 }
 
 void Histories::readClientSideMessage(not_null<HistoryItem*> item) {
-	if (item->out() || !item->unread(item->history())) {
+	if (item->out()
+		|| !item->unread(item->history())
+		|| GhostModeKeepsUnread()) {
 		return;
 	}
 	const auto history = item->history();
@@ -721,6 +749,9 @@ void Histories::sendReadRequests() {
 	DEBUG_LOG(("Reading: send requests with count %1.").arg(_states.size()));
 	if (_states.empty()) {
 		return;
+	} else if (GhostModeEnabled()) {
+		_readRequestsTimer.cancel();
+		return;
 	}
 	const auto now = crl::now();
 	auto next = std::optional<crl::time>();
@@ -750,6 +781,7 @@ void Histories::sendReadRequest(not_null<History*> history, State &state) {
 	const auto tillId = state.sentReadTill = base::take(state.willReadTill);
 	state.willReadWhen = 0;
 	state.sentReadDone = false;
+	forgetGhostRead(history->peer->id, tillId);
 	DEBUG_LOG(("Reading: sending request now with till %1."
 		).arg(tillId.bare));
 	sendRequest(history, RequestType::ReadInbox, [=](Fn<void()> finish) {
@@ -790,6 +822,203 @@ void Histories::sendReadRequest(not_null<History*> history, State &state) {
 			}).send();
 		}
 	});
+}
+
+void Histories::readInboxExplicitly(not_null<History*> history) {
+	if (GhostModeEnabled()) {
+		_ghostExplicitReads.emplace(history);
+	}
+	readInbox(history);
+}
+
+void Histories::clearUnreadMarkOnOpen(not_null<History*> history) {
+	if (!history->unreadMark()) {
+		return;
+	} else if (GhostModeKeepsUnread()) {
+		// An open chat can't keep the mark (the view closes itself),
+		// so drop it on this device only and leave the server copy.
+		history->setUnreadMark(false);
+		return;
+	}
+	changeDialogUnreadMark(history, false);
+}
+
+void Histories::ghostReadInboxTill(
+		not_null<History*> history,
+		MsgId tillId) {
+	Core::App().notifications().clearIncomingFromHistory(history);
+
+	const auto explicitly = _ghostExplicitReads.remove(history);
+	if (!explicitly && GhostModeKeepsUnread()) {
+		return;
+	} else if (!history->trackUnreadMessages() || !history->folderKnown()) {
+		return;
+	}
+	if (history->unreadMark()) {
+		changeDialogUnreadMark(history, false);
+	}
+	const auto wasTill = history->inboxReadTillId();
+	const auto wasUnread = history->unreadCountKnown()
+		? history->unreadCount()
+		: -1;
+	if (tillId && tillId <= wasTill && !wasUnread) {
+		return;
+	}
+	auto stillUnread = tillId
+		? history->countStillUnreadLocal(tillId)
+		: std::optional<int>();
+	if (!stillUnread && history->lastServerMessageKnown()) {
+		const auto last = history->lastServerMessage();
+		if (!last || last->id <= tillId) {
+			stillUnread = 0;
+		}
+	}
+	if (tillId) {
+		history->setInboxReadTill(tillId);
+	}
+	if (stillUnread) {
+		history->setUnreadCount(*stillUnread);
+	}
+	history->updateChatListEntry();
+	rememberGhostRead(history, wasTill, wasUnread);
+}
+
+void Histories::rememberGhostRead(
+		not_null<History*> history,
+		MsgId wasTill,
+		int wasUnread) {
+	const auto nowTill = history->inboxReadTillId();
+	if (nowTill <= wasTill) {
+		return;
+	}
+	loadGhostReads();
+	const auto nowUnread = history->unreadCountKnown()
+		? history->unreadCount()
+		: -1;
+	const auto peerId = history->peer->id;
+	auto i = _ghostReads.find(peerId);
+	if (i == end(_ghostReads)) {
+		i = _ghostReads.emplace(peerId, GhostRead{
+			.serverTill = wasTill,
+			.ghostTill = nowTill,
+			.hidden = 0,
+		}).first;
+	}
+	auto &entry = i->second;
+	entry.ghostTill = std::max(entry.ghostTill, nowTill);
+	if (entry.hidden >= 0 && wasUnread >= 0 && nowUnread >= 0) {
+		entry.hidden += std::max(wasUnread - nowUnread, 0);
+	} else {
+		entry.hidden = -1;
+	}
+	saveGhostReads();
+}
+
+void Histories::forgetGhostRead(PeerId peerId, MsgId serverTill) {
+	loadGhostReads();
+	const auto i = _ghostReads.find(peerId);
+	if (i != end(_ghostReads) && i->second.ghostTill <= serverTill) {
+		_ghostReads.erase(i);
+		saveGhostReads();
+	}
+}
+
+void Histories::applyGhostReadState(
+		not_null<History*> history,
+		MsgId serverReadTill,
+		int serverUnreadCount) {
+	loadGhostReads();
+	const auto i = _ghostReads.find(history->peer->id);
+	if (i == end(_ghostReads)) {
+		return;
+	}
+	auto &entry = i->second;
+	if (serverReadTill >= entry.ghostTill) {
+		// Read for real somewhere, nothing left to restore.
+		_ghostReads.erase(i);
+		saveGhostReads();
+		return;
+	} else if (history->inboxReadTillId() >= entry.ghostTill) {
+		return;
+	}
+	if (serverReadTill != entry.serverTill) {
+		// Partly read on another device: the hidden count is stale.
+		entry.serverTill = serverReadTill;
+		entry.hidden = -1;
+		saveGhostReads();
+	}
+	history->setInboxReadTill(entry.ghostTill);
+	if (entry.hidden >= 0) {
+		history->setUnreadCount(
+			std::max(serverUnreadCount - entry.hidden, 0));
+	}
+}
+
+std::string Histories::ghostReadsPrefKey() const {
+	return "ghost_reads_" + std::to_string(session().userId().bare);
+}
+
+void Histories::loadGhostReads() {
+	if (_ghostReadsLoaded) {
+		return;
+	}
+	_ghostReadsLoaded = true;
+	const auto bytes = Core::App().settings().readPref<QByteArray>(
+		ghostReadsPrefKey());
+	if (bytes.isEmpty()) {
+		return;
+	}
+	QDataStream stream(bytes);
+	stream.setVersion(QDataStream::Qt_5_1);
+	auto version = qint32();
+	auto count = quint32();
+	stream >> version >> count;
+	if (stream.status() != QDataStream::Ok || version != 1) {
+		return;
+	}
+	for (auto i = quint32(); i != count; ++i) {
+		auto peer = quint64();
+		auto serverTill = qint64();
+		auto ghostTill = qint64();
+		auto hidden = qint32();
+		stream >> peer >> serverTill >> ghostTill >> hidden;
+		if (stream.status() != QDataStream::Ok) {
+			_ghostReads.clear();
+			return;
+		}
+		const auto peerId = DeserializePeerId(peer);
+		if (peerId && ghostTill > serverTill) {
+			_ghostReads[peerId] = GhostRead{
+				.serverTill = MsgId(serverTill),
+				.ghostTill = MsgId(ghostTill),
+				.hidden = int(hidden),
+			};
+		}
+	}
+}
+
+void Histories::saveGhostReads() {
+	auto &settings = Core::App().settings();
+	const auto key = ghostReadsPrefKey();
+	if (_ghostReads.empty()) {
+		settings.clearPref(key);
+	} else {
+		auto bytes = QByteArray();
+		{
+			QDataStream stream(&bytes, QIODevice::WriteOnly);
+			stream.setVersion(QDataStream::Qt_5_1);
+			stream << qint32(1) << quint32(_ghostReads.size());
+			for (const auto &[peerId, entry] : _ghostReads) {
+				stream
+					<< quint64(SerializePeerId(peerId))
+					<< qint64(entry.serverTill.bare)
+					<< qint64(entry.ghostTill.bare)
+					<< qint32(entry.hidden);
+			}
+		}
+		settings.writePref<QByteArray>(key, bytes);
+	}
+	Core::App().saveSettingsDelayed();
 }
 
 void Histories::checkEmptyState(not_null<History*> history) {

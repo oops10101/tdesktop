@@ -35,6 +35,10 @@ class SavedSublist;
 	const Data::WebPageDraft &draft,
 	bool required = false);
 
+// Ghost mode: chats are read without sending read receipts.
+[[nodiscard]] bool GhostModeEnabled();
+[[nodiscard]] bool GhostModeKeepsUnread();
+
 class Histories final {
 public:
 	enum class RequestType : uchar {
@@ -65,6 +69,15 @@ public:
 	void readClientSideMessage(not_null<HistoryItem*> item);
 	void sendPendingReadInbox(not_null<History*> history);
 	void reportDelivery(not_null<HistoryItem*> item);
+
+	// An explicit "Mark as read": in ghost mode it is applied locally
+	// even when chats are kept unread, and is never sent to the server.
+	void readInboxExplicitly(not_null<History*> history);
+	void clearUnreadMarkOnOpen(not_null<History*> history);
+	void applyGhostReadState(
+		not_null<History*> history,
+		MsgId serverReadTill,
+		int serverUnreadCount);
 
 	struct ShownRead {
 		not_null<HistoryItem*> shown;
@@ -200,7 +213,24 @@ private:
 		}
 	}
 
+	// A chat read in ghost mode on this device only, remembered across
+	// restarts because the server still reports it as unread.
+	struct GhostRead {
+		MsgId serverTill = 0;
+		MsgId ghostTill = 0;
+		int hidden = -1; // Unread messages hidden locally, -1 if unknown.
+	};
+
 	void readInboxTill(not_null<History*> history, MsgId tillId, bool force);
+	void ghostReadInboxTill(not_null<History*> history, MsgId tillId);
+	void rememberGhostRead(
+		not_null<History*> history,
+		MsgId wasTill,
+		int wasUnread);
+	void forgetGhostRead(PeerId peerId, MsgId serverTill);
+	void loadGhostReads();
+	void saveGhostReads();
+	[[nodiscard]] std::string ghostReadsPrefKey() const;
 	void readShownTill(
 		not_null<HistoryItem*> shown,
 		MsgId tillId,
@@ -260,6 +290,11 @@ private:
 		not_null<PeerData*>,
 		base::flat_set<MsgId>> _pendingDeliveryReport;
 	base::flat_set<not_null<PeerData*>> _deliveryReportSent;
+
+	base::flat_map<PeerId, GhostRead> _ghostReads;
+	base::flat_set<not_null<History*>> _ghostExplicitReads;
+	bool _ghostReadsLoaded = false;
+	rpl::lifetime _ghostLifetime;
 
 };
 

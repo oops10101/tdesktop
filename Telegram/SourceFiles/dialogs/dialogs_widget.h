@@ -87,6 +87,7 @@ struct SearchRequestType;
 enum class SearchRequestDelay : uchar;
 class Suggestions;
 class ChatSearchIn;
+class GhostModeButton;
 enum class ChatSearchTab : uchar;
 enum class HashOrCashtag : uchar;
 
@@ -211,6 +212,8 @@ private:
 	void setupFrozenAccountBar();
 	void setupConnectingWidget();
 	void setupMainMenuToggle();
+	void setupGhostModeButton();
+	void showGhostModeMenu();
 	void setupMoreChatsBar();
 	void switchToChatsFilter(FilterId id);
 	[[nodiscard]] QPixmap grabForChatsFilterSlide();
@@ -348,6 +351,8 @@ private:
 	object_ptr<Ui::FadeWrapScaled<Ui::IconButton>> _jumpToDate;
 	object_ptr<Ui::CrossButton> _cancelSearch;
 	object_ptr<Ui::FadeWrapScaled<Ui::IconButton>> _lockUnlock;
+	object_ptr<GhostModeButton> _ghostMode = { nullptr };
+	base::unique_qptr<Ui::PopupMenu> _ghostModeMenu;
 
 	std::unique_ptr<Ui::MoreChatsBar> _moreChatsBar;
 

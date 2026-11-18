@@ -15,6 +15,14 @@ dialogsMenuToggleUnreadMuted: icon {
 	{ "dialogs/dialogs_menu_unread", dialogsMenuIconFg },
 	{ "dialogs/dialogs_menu_unread_dot", dialogsMenuIconFg },
 };
+dialogsGhostMenuAbout: FlatLabel(defaultFlatLabel) {
+	style: TextStyle(defaultTextStyle) {
+		font: font(11px);
+	}
+	minWidth: 120px;
+	textFg: windowSubTextFg;
+}
+dialogsGhostMenuAboutPosition: point(54px, 4px);
 dialogsLock: IconButton {
 	width: 36px;
 	height: 38px;

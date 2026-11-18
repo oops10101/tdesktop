@@ -614,6 +614,9 @@ void SavedSublist::readTill(
 		HistoryItem *tillIdItem) {
 	if (!IsServerMsgId(tillId)) {
 		return;
+	} else if (GhostModeKeepsUnread()) {
+		Core::App().notifications().clearIncomingFromSublist(this);
+		return;
 	}
 	if (unreadMark()) {
 		owner().histories().changeSublistUnreadMark(this, false);
@@ -636,7 +639,9 @@ void SavedSublist::readTill(
 		|| !unreadCount.has_value();
 	if (was < now || (fast && now == was)) {
 		setInboxReadTill(now, unreadCount);
-		if (!_readRequestTimer.isActive()) {
+		if (GhostModeEnabled()) {
+			// Ghost mode: read on this device only.
+		} else if (!_readRequestTimer.isActive()) {
 			_readRequestTimer.callOnce(fast ? 0 : kReadRequestTimeout);
 		} else if (fast && _readRequestTimer.remainingTime() > 0) {
 			_readRequestTimer.callOnce(0);
@@ -652,6 +657,9 @@ void SavedSublist::sendReadTillRequest() {
 	}
 	if (_readRequestTimer.isActive()) {
 		_readRequestTimer.cancel();
+	}
+	if (GhostModeEnabled()) {
+		return;
 	}
 	const auto api = &_parent->session().api();
 	api->request(base::take(_readRequestId)).cancel();

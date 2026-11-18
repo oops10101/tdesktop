@@ -984,6 +984,21 @@ public:
 		_weatherInCelsius = value;
 	}
 
+	[[nodiscard]] bool ghostMode() const {
+		return _ghostMode.current();
+	}
+	[[nodiscard]] rpl::producer<bool> ghostModeValue() const {
+		return _ghostMode.value();
+	}
+	void setGhostMode(bool enabled);
+	[[nodiscard]] bool ghostKeepUnread() const {
+		return _ghostKeepUnread.current();
+	}
+	[[nodiscard]] rpl::producer<bool> ghostKeepUnreadValue() const {
+		return _ghostKeepUnread.value();
+	}
+	void setGhostKeepUnread(bool enabled);
+
 	[[nodiscard]] QByteArray tonsiteStorageToken() const {
 		return _tonsiteStorageToken;
 	}
@@ -1058,6 +1073,7 @@ public:
 
 private:
 	void resolveRecentEmoji() const;
+	void applyGhostModePrefs();
 
 	template <typename Type>
 	void writePrefImpl(std::string_view key, Type value);
@@ -1196,6 +1212,8 @@ private:
 	QString _customFontFamily;
 	bool _systemUnlockEnabled = false;
 	std::optional<bool> _weatherInCelsius;
+	rpl::variable<bool> _ghostMode = false;
+	rpl::variable<bool> _ghostKeepUnread = true;
 	QByteArray _tonsiteStorageToken;
 	rpl::variable<int> _ivZoom = 0;
 	Media::VideoQuality _videoQuality;

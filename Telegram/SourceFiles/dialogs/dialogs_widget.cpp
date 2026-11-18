@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/dialogs_top_bar_suggestion.h"
 #include "dialogs/dialogs_quick_action.h"
 #include "dialogs/dialogs_key.h"
+#include "dialogs/dialogs_ghost_mode_button.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/view/history_view_chat_section.h"
@@ -36,6 +37,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/chat_filters_tabs_strip.h"
 #include "ui/widgets/elastic_scroll.h"
 #include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/menu/menu_multiline_action.h"
+#include "ui/widgets/menu/menu_toggle.h"
+#include "ui/widgets/popup_menu.h"
 #include "ui/wrap/fade_wrap.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
@@ -63,6 +67,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "chat_helpers/message_field.h"
 #include "core/application.h"
+#include "core/core_settings.h"
 #include "core/ui_integration.h"
 #include "core/update_checker.h"
 #include "core/shortcuts.h"
@@ -101,6 +106,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs_widget.h"
 #include "styles/style_info.h"
 #include "styles/style_window.h"
+#include "styles/style_menu_icons.h"
 #include "base/qt/qt_common_adapters.h"
 
 #include <QtCore/QMimeData>
@@ -723,6 +729,7 @@ Widget::Widget(
 	});
 
 	setupMainMenuToggle();
+	setupGhostModeButton();
 	setupShortcuts();
 	if (_stories) {
 		setupStories();
@@ -1744,6 +1751,82 @@ void Widget::setupMainMenuToggle() {
 			: &st::dialogsMenuToggleUnreadMuted;
 		_mainMenu.toggle->setIconOverride(icon, icon);
 	}, _mainMenu.toggle->lifetime());
+}
+
+void Widget::setupGhostModeButton() {
+	if (_layout == Layout::Child) {
+		return;
+	}
+	_ghostMode.create(_searchControls);
+	const auto button = _ghostMode.data();
+	button->setAcceptBoth(true);
+	button->setAccessibleName(tr::lng_ghost_mode(tr::now));
+
+	auto &settings = Core::App().settings();
+	button->setActive(settings.ghostMode(), anim::type::instant);
+	settings.ghostModeValue(
+	) | rpl::on_next([=](bool enabled) {
+		button->setActive(enabled, anim::type::normal);
+	}, button->lifetime());
+
+	button->clicks(
+	) | rpl::on_next([=](Qt::MouseButton which) {
+		if (which == Qt::RightButton) {
+			showGhostModeMenu();
+			return;
+		}
+		auto &settings = Core::App().settings();
+		const auto enable = !settings.ghostMode();
+		settings.setGhostMode(enable);
+		Core::App().saveSettingsDelayed();
+		controller()->showToast(enable
+			? tr::lng_ghost_mode_enabled(tr::now)
+			: tr::lng_ghost_mode_disabled(tr::now));
+	}, button->lifetime());
+
+	updateControlsGeometry();
+}
+
+void Widget::showGhostModeMenu() {
+	_ghostModeMenu = base::make_unique_q<Ui::PopupMenu>(
+		this,
+		st::popupMenuWithIcons);
+	const auto menu = _ghostModeMenu.get();
+
+	auto toggle = base::make_unique_q<Ui::Menu::Toggle>(
+		menu->menu(),
+		menu->st().menu,
+		tr::lng_ghost_keep_unread(tr::now),
+		[] {
+			auto &settings = Core::App().settings();
+			settings.setGhostKeepUnread(!settings.ghostKeepUnread());
+			Core::App().saveSettingsDelayed();
+		},
+		&st::menuIconMarkUnread,
+		&st::menuIconMarkUnread);
+	const auto raw = toggle.get();
+	raw->setPreventClose(true);
+	raw->action()->setCheckable(true);
+	Core::App().settings().ghostKeepUnreadValue(
+	) | rpl::on_next([=](bool keep) {
+		raw->action()->setChecked(keep);
+	}, raw->lifetime());
+	raw->finishAnimating();
+	menu->addAction(std::move(toggle));
+
+	menu->addSeparator();
+	auto about = base::make_unique_q<Ui::Menu::MultilineAction>(
+		menu->menu(),
+		menu->st().menu,
+		st::dialogsGhostMenuAbout,
+		st::dialogsGhostMenuAboutPosition,
+		TextWithEntities{ tr::lng_ghost_keep_unread_about(tr::now) },
+		&st::menuIconInfo,
+		&st::menuIconInfo);
+	about->setAttribute(Qt::WA_TransparentForMouseEvents);
+	menu->addAction(std::move(about));
+
+	menu->popup(QCursor::pos());
 }
 
 void Widget::setupStories() {
@@ -4666,8 +4749,9 @@ void Widget::updateControlsGeometry() {
 		? st::dialogsFilterSkip
 		: (st::dialogsFilterPadding.x() + _mainMenu.toggle->width()))
 		+ st::dialogsFilterPadding.x();
-	const auto filterRight = st::dialogsFilterSkip
-		+ st::dialogsFilterPadding.x();
+	const auto filterRight = _ghostMode
+		? (2 * st::dialogsFilterPadding.x() + _ghostMode->width())
+		: (st::dialogsFilterSkip + st::dialogsFilterPadding.x());
 	const auto filterWidth = std::max(ratiow, smallw)
 		- filterLeft
 		- filterRight;
@@ -4714,6 +4798,11 @@ void Widget::updateControlsGeometry() {
 	_jumpToDate->moveToLeft(right, _search->y());
 	right -= _chooseFromUser->width();
 	_chooseFromUser->moveToLeft(right, _search->y());
+	if (_ghostMode) {
+		_ghostMode->moveToLeft(
+			filterLeft + filterWidth + st::dialogsFilterPadding.x(),
+			st::dialogsFilterPadding.y());
+	}
 
 	const auto barw = width();
 	const auto expandedStoriesTop = filterAreaTop + filterAreaHeight;

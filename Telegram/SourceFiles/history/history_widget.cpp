@@ -3639,15 +3639,9 @@ void HistoryWidget::showHistory(
 		}
 
 		// Must be done before unreadCountUpdated(), or we auto-close.
-		if (_history->unreadMark()) {
-			session().data().histories().changeDialogUnreadMark(
-				_history,
-				false);
-		}
-		if (_migrated && _migrated->unreadMark()) {
-			session().data().histories().changeDialogUnreadMark(
-				_migrated,
-				false);
+		session().data().histories().clearUnreadMarkOnOpen(_history);
+		if (_migrated) {
+			session().data().histories().clearUnreadMarkOnOpen(_migrated);
 		}
 		unreadCountUpdated(); // set _historyDown badge.
 		showAboutTopPromotion();
